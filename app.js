@@ -920,7 +920,7 @@ function renderGameForm() {
         <label>PHC Shots on Goal<input id="shotsFor" inputmode="numeric" type="number" min="0" value="${game.shotsFor}"></label>
         <label>PP Opportunities<input id="ppOpps" inputmode="numeric" type="number" min="0" value="${game.ppOpps}"></label>
         <label>PK Opportunities / Times Shorthanded<input id="pkOpps" inputmode="numeric" type="number" min="0" value="${game.pkOpps}"></label>
-        <label>PP Goals Against<input id="pkGoalsAgainst" inputmode="numeric" type="number" min="0" value="${game.pkGoalsAgainst}"></label>
+        <label>PK Goals Against<input id="pkGoalsAgainst" inputmode="numeric" type="number" min="0" value="${game.pkGoalsAgainst}"></label>
         <label>Empty-net Goals Against<input id="emptyNetAgainst" inputmode="numeric" type="number" min="0" value="${game.emptyNetAgainst}"></label>
       </div>
       <p class="help">Opponent shots are calculated from individual goalie shots against.</p>
