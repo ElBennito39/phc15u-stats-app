@@ -162,6 +162,41 @@ function playerLabel(id, fallback = '—') {
   return p ? `#${p.jersey} ${p.first} ${p.last}` : fallback;
 }
 
+function skaterIdSet() {
+  return new Set(skaters().map(p => p.id));
+}
+
+function normalizeOnIceIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  const valid = skaterIdSet();
+  const clean = [];
+  for (const id of ids) {
+    const value = String(id || '').trim();
+    if (!value || !valid.has(value) || clean.includes(value)) continue;
+    clean.push(value);
+    if (clean.length >= 5) break;
+  }
+  return clean;
+}
+
+function onIceSummary(ids) {
+  const selected = normalizeOnIceIds(ids);
+  if (!selected.length) return 'No skaters selected';
+  return selected.map(id => {
+    const p = playersById()[id];
+    return p ? `#${p.jersey} ${p.last}` : '';
+  }).filter(Boolean).join(', ');
+}
+
+function onIceStatus(ids) {
+  const count = normalizeOnIceIds(ids).length;
+  return `${count}/5 selected`;
+}
+
+function isEvenStrength(value) {
+  return String(value || '').toUpperCase() === 'EV';
+}
+
 function updateHeader() {
   $('#appTitle').textContent = state.team.name || DEFAULT_TEAM.name;
   $('#subtitle').textContent = `${state.team.season || DEFAULT_TEAM.season} local-first stat tracker`;
@@ -177,7 +212,7 @@ function downloadOrShare(filename, mimeType, contents) {
   const file = new File([blob], filename, { type: mimeType });
 
   if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-    navigator.share({ files: [file], title: filename }).catch(() => fallbackDownload(filename, blob));
+    navigator.share({ files: [file] }).catch(() => fallbackDownload(filename, blob));
     return;
   }
   fallbackDownload(filename, blob);
@@ -337,6 +372,7 @@ function newGame() {
     pkGoalsAgainst: 0,
     emptyNetAgainst: 0,
     scoringPlays: [],
+    opponentGoalEvents: [],
     penalties: [],
     goalieStats: defaultGoalieStats(),
     notes: '',
@@ -353,8 +389,17 @@ function sanitizeGame(game = {}) {
     scorerId: g.scorerId || '',
     assist1Id: g.assist1Id || '',
     assist2Id: g.assist2Id || '',
+    onIceSkaterIds: normalizeOnIceIds(g.onIceSkaterIds || g.onIceIds || []),
     period: g.period || '',
     time: g.time || ''
+  })) : [];
+  clean.opponentGoalEvents = Array.isArray(game.opponentGoalEvents) ? game.opponentGoalEvents.map(g => ({
+    id: g.id || uid('oppgoal'),
+    strength: g.strength || 'EV',
+    onIceSkaterIds: normalizeOnIceIds(g.onIceSkaterIds || g.onIceIds || []),
+    period: g.period || '',
+    time: g.time || '',
+    note: g.note || ''
   })) : [];
   clean.penalties = Array.isArray(game.penalties) ? game.penalties.map(p => ({
     id: p.id || uid('pen'),
@@ -394,7 +439,10 @@ function calculateGame(game) {
     ppPoints: 0,
     shGoals: 0,
     shAssists: 0,
-    pim: 0
+    pim: 0,
+    evGoalsForOnIce: 0,
+    evGoalsAgainstOnIce: 0,
+    plusMinus: 0
   }]));
 
   for (const play of g.scoringPlays) {
@@ -410,6 +458,18 @@ function calculateGame(game) {
         if (play.strength === 'SH') playerStats[aid].shAssists += 1;
       }
     }
+    if (isEvenStrength(play.strength)) {
+      for (const id of normalizeOnIceIds(play.onIceSkaterIds)) {
+        if (playerStats[id]) playerStats[id].evGoalsForOnIce += 1;
+      }
+    }
+  }
+
+  for (const event of g.opponentGoalEvents || []) {
+    if (!isEvenStrength(event.strength)) continue;
+    for (const id of normalizeOnIceIds(event.onIceSkaterIds)) {
+      if (playerStats[id]) playerStats[id].evGoalsAgainstOnIce += 1;
+    }
   }
 
   for (const pen of g.penalties) {
@@ -419,6 +479,7 @@ function calculateGame(game) {
   for (const stat of Object.values(playerStats)) {
     stat.points = stat.goals + stat.assists;
     stat.ppPoints = stat.ppGoals + stat.ppAssists;
+    stat.plusMinus = stat.evGoalsForOnIce - stat.evGoalsAgainstOnIce;
   }
 
   const goalieLines = g.goalieStats.map(line => {
@@ -441,6 +502,9 @@ function calculateGame(game) {
   const ppGoals = g.scoringPlays.filter(p => p.strength === 'PP').length;
   const shGoals = g.scoringPlays.filter(p => p.strength === 'SH').length;
   const enGoalsFor = g.scoringPlays.filter(p => p.strength === 'EN').length;
+  const evGoalsForTracked = g.scoringPlays.filter(p => isEvenStrength(p.strength)).length;
+  const evGoalsAgainstTracked = (g.opponentGoalEvents || []).filter(p => isEvenStrength(p.strength)).length;
+  const opponentGoalEventsRecorded = (g.opponentGoalEvents || []).length;
   const goalieShotsAgainst = goalieLines.reduce((sum, line) => sum + line.shotsAgainst, 0);
   const goalieGoalsAgainst = goalieLines.reduce((sum, line) => sum + line.goalsAgainst, 0);
   const goalieSaves = goalieLines.reduce((sum, line) => sum + line.saves, 0);
@@ -467,6 +531,9 @@ function calculateGame(game) {
       pkPct: percent(pkSuccessful, clampNonnegative(g.pkOpps)),
       shGoals,
       enGoalsFor,
+      evGoalsForTracked,
+      evGoalsAgainstTracked,
+      opponentGoalEventsRecorded,
       emptyNetAgainst: clampNonnegative(g.emptyNetAgainst),
       goalieGoalsAgainst,
       goalieSaves,
@@ -495,11 +562,14 @@ function calculateSeason(games) {
     goalieSaves: 0,
     goalieGoalsAgainst: 0,
     goalieMinutes: 0,
-    emptyNetAgainst: 0
+    emptyNetAgainst: 0,
+    evGoalsForTracked: 0,
+    evGoalsAgainstTracked: 0
   };
   const playerTotals = Object.fromEntries(roster().map(p => [p.id, {
     playerId: p.id,
     goals: 0, assists: 0, points: 0, ppGoals: 0, ppAssists: 0, ppPoints: 0, shGoals: 0, shAssists: 0, pim: 0,
+    evGoalsForOnIce: 0, evGoalsAgainstOnIce: 0, plusMinus: 0,
     goalieMinutes: 0, goalieShotsAgainst: 0, goalieGoalsAgainst: 0, goalieSaves: 0
   }]));
 
@@ -517,6 +587,8 @@ function calculateSeason(games) {
     totals.goalieGoalsAgainst += calc.team.goalieGoalsAgainst;
     totals.goalieMinutes += calc.team.goalieMinutes;
     totals.emptyNetAgainst += calc.team.emptyNetAgainst;
+    totals.evGoalsForTracked += calc.team.evGoalsForTracked;
+    totals.evGoalsAgainstTracked += calc.team.evGoalsAgainstTracked;
     if (calc.team.goalsFor > calc.team.opponentGoals) totals.wins += 1;
     else if (calc.team.goalsFor < calc.team.opponentGoals) totals.losses += 1;
     else totals.ties += 1;
@@ -533,6 +605,9 @@ function calculateSeason(games) {
       dest.shGoals += stat.shGoals;
       dest.shAssists += stat.shAssists;
       dest.pim += stat.pim;
+      dest.evGoalsForOnIce += stat.evGoalsForOnIce;
+      dest.evGoalsAgainstOnIce += stat.evGoalsAgainstOnIce;
+      dest.plusMinus = dest.evGoalsForOnIce - dest.evGoalsAgainstOnIce;
     }
     for (const line of calc.goalieLines) {
       const dest = playerTotals[line.goalieId];
@@ -554,11 +629,19 @@ function calculateSeason(games) {
 
 function gameWarnings(game) {
   const calc = calculateGame(game);
+  const g = calc.game;
   const warnings = [];
   if (calc.team.ppGoals > calc.team.ppOpps) warnings.push({ level: 'bad', text: 'PP goals are greater than PP opportunities.' });
   if (calc.team.pkGoalsAgainst > calc.team.pkOpps) warnings.push({ level: 'bad', text: 'PP goals against are greater than PK opportunities.' });
   if (calc.team.goalieMinutes !== state.team.defaultGameMinutes) warnings.push({ level: 'warn', text: `Goalie minutes total ${calc.team.goalieMinutes}; expected ${state.team.defaultGameMinutes}. This may be fine if there was overtime, a shortened game, or an unusual goalie pull.` });
   if (calc.team.opponentGoals !== calc.team.opponentGoalsExpected) warnings.push({ level: 'warn', text: `Opponent score is ${calc.team.opponentGoals}, but goalie GA + empty-net GA totals ${calc.team.opponentGoalsExpected}.` });
+  g.scoringPlays.forEach((play, idx) => {
+    if (isEvenStrength(play.strength) && normalizeOnIceIds(play.onIceSkaterIds).length !== 5) warnings.push({ level: 'warn', text: `PHC EV goal #${idx + 1} needs exactly 5 on-ice skaters for plus/minus.` });
+  });
+  g.opponentGoalEvents.forEach((event, idx) => {
+    if (isEvenStrength(event.strength) && normalizeOnIceIds(event.onIceSkaterIds).length !== 5) warnings.push({ level: 'warn', text: `Opponent EV goal #${idx + 1} needs exactly 5 on-ice skaters for plus/minus.` });
+  });
+  if (g.opponentGoalEvents.length && g.opponentGoalEvents.length !== calc.team.opponentGoals) warnings.push({ level: 'warn', text: `You recorded ${g.opponentGoalEvents.length} opponent goal event(s), but the opponent score is ${calc.team.opponentGoals}.` });
   if (calc.team.goalsFor === 0 && calc.team.opponentGoals === 0) warnings.push({ level: 'warn', text: 'Final score is 0-0 based on current entries.' });
   if (!game.opponent?.trim()) warnings.push({ level: 'warn', text: 'Opponent is blank.' });
   if (!warnings.length) warnings.push({ level: 'good', text: 'No obvious entry issues found.' });
@@ -714,9 +797,9 @@ function renderTotals() {
     <section class="card">
       <h3>Skater Totals</h3>
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Player</th><th class="num">G</th><th class="num">A</th><th class="num">PTS</th><th class="num">PPG</th><th class="num">PPA</th><th class="num">PPP</th><th class="num">PIM</th></tr></thead>
+        <thead><tr><th>#</th><th>Player</th><th class="num">G</th><th class="num">A</th><th class="num">PTS</th><th class="num">+/-</th><th class="num">EV GF</th><th class="num">EV GA</th><th class="num">PPG</th><th class="num">PPA</th><th class="num">PPP</th><th class="num">PIM</th></tr></thead>
         <tbody>${sortedSkaters.map(p => `
-          <tr><td>${p.jersey}</td><td>${escapeHtml(`${p.first} ${p.last}`)}</td><td class="num">${p.stats.goals}</td><td class="num">${p.stats.assists}</td><td class="num">${p.stats.points}</td><td class="num">${p.stats.ppGoals}</td><td class="num">${p.stats.ppAssists}</td><td class="num">${p.stats.ppPoints}</td><td class="num">${p.stats.pim}</td></tr>
+          <tr><td>${p.jersey}</td><td>${escapeHtml(`${p.first} ${p.last}`)}</td><td class="num">${p.stats.goals}</td><td class="num">${p.stats.assists}</td><td class="num">${p.stats.points}</td><td class="num">${p.stats.plusMinus}</td><td class="num">${p.stats.evGoalsForOnIce}</td><td class="num">${p.stats.evGoalsAgainstOnIce}</td><td class="num">${p.stats.ppGoals}</td><td class="num">${p.stats.ppAssists}</td><td class="num">${p.stats.ppPoints}</td><td class="num">${p.stats.pim}</td></tr>
         `).join('')}</tbody>
       </table></div>
     </section>
@@ -773,6 +856,7 @@ function renderTools() {
         <button id="exportRosterJson" class="ghost" ${hasRoster() ? '' : 'disabled'}>Export Roster JSON</button>
         <button id="exportSeasonCsv" class="secondary" ${hasRoster() ? '' : 'disabled'}>Export Season Player Totals CSV</button>
         <button id="exportGameLogCsv" class="secondary" ${hasRoster() ? '' : 'disabled'}>Export All Game Logs CSV</button>
+        <button id="exportOnIceEventsCsv" class="secondary" ${hasRoster() ? '' : 'disabled'}>Export On-Ice Events CSV</button>
       </div>
     </section>
     <section class="card">
@@ -787,6 +871,7 @@ function renderTools() {
   $('#importJson').addEventListener('click', () => chooseJsonFile('auto'));
   $('#exportSeasonCsv')?.addEventListener('click', exportSeasonTotalsCsv);
   $('#exportGameLogCsv')?.addEventListener('click', exportAllGameLogsCsv);
+  $('#exportOnIceEventsCsv')?.addEventListener('click', exportOnIceEventsCsv);
   $('#exportBackupJson')?.addEventListener('click', exportBackupJson);
   $('#exportRosterJson')?.addEventListener('click', exportRosterJson);
 }
@@ -829,6 +914,7 @@ function renderGameForm() {
         <div class="kpi"><div class="value">${calc.team.shotsFor}-${calc.team.shotsAgainst}</div><div class="label">Shots</div></div>
         <div class="kpi"><div class="value">${calc.team.ppGoals}/${calc.team.ppOpps}</div><div class="label">PP ${calc.team.ppPct || ''}</div></div>
         <div class="kpi"><div class="value">${Math.max(0, calc.team.pkOpps - calc.team.pkGoalsAgainst)}/${calc.team.pkOpps}</div><div class="label">PK ${calc.team.pkPct || ''}</div></div>
+        <div class="kpi"><div class="value">${calc.team.evGoalsForTracked}-${calc.team.evGoalsAgainstTracked}</div><div class="label">EV +/- Events</div></div>
       </div>
       <div class="grid two" style="margin-top:10px;">
         <label>PHC Shots on Goal<input id="shotsFor" inputmode="numeric" type="number" min="0" value="${game.shotsFor}"></label>
@@ -843,7 +929,15 @@ function renderGameForm() {
     <section class="card">
       <div class="row between wrap"><h3>PHC Scoring Plays</h3><button id="addGoalBtn" class="secondary small">Add Goal</button></div>
       <div class="stack" id="goalsList">
-        ${game.scoringPlays.length ? game.scoringPlays.map(goalRow).join('') : '<p class="help">Add one row per PHC goal. PP goals automatically create player and team power-play stats.</p>'}
+        ${game.scoringPlays.length ? game.scoringPlays.map(goalRow).join('') : '<p class="help">Add one row per PHC goal. PP goals automatically create player and team power-play stats. For EV goals, tap Select 5 to record plus/minus.</p>'}
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row between wrap"><h3>Opponent Goals</h3><button id="addOpponentGoalBtn" class="secondary small">Add Opponent Goal</button></div>
+      <p class="help">Add opponent goals here when you want plus/minus. EV opponent goals should have exactly five PHC skaters selected.</p>
+      <div class="stack" id="opponentGoalsList">
+        ${game.opponentGoalEvents.length ? game.opponentGoalEvents.map(opponentGoalRow).join('') : '<p class="help">No opponent goal events recorded yet.</p>'}
       </div>
     </section>
 
@@ -886,13 +980,35 @@ function renderGameForm() {
 }
 
 function goalRow(play, index) {
+  const onIce = normalizeOnIceIds(play.onIceSkaterIds);
   return `
     <div class="goal-row" data-goal-id="${play.id}">
       <label>Strength<select class="goal-strength"><option ${play.strength === 'EV' ? 'selected' : ''}>EV</option><option ${play.strength === 'PP' ? 'selected' : ''}>PP</option><option ${play.strength === 'SH' ? 'selected' : ''}>SH</option><option ${play.strength === 'EN' ? 'selected' : ''}>EN</option></select></label>
       <label>Scorer<select class="goal-scorer">${optionsForSkaters(play.scorerId, true, 'Scorer')}</select></label>
       <label>Assist 1<select class="goal-assist1">${optionsForPlayers(play.assist1Id, true, 'No assist')}</select></label>
       <label>Assist 2<select class="goal-assist2">${optionsForPlayers(play.assist2Id, true, 'No assist')}</select></label>
+      <div class="on-ice-field">
+        <div class="item-sub">EV on ice: ${escapeHtml(onIceStatus(onIce))}</div>
+        <button class="ghost small select-on-ice" data-kind="for" data-id="${play.id}" type="button">Select 5</button>
+      </div>
       <button class="danger small remove-goal" data-id="${play.id}" aria-label="Remove goal ${index + 1}">Remove</button>
+      <div class="on-ice-summary">${escapeHtml(onIceSummary(onIce))}</div>
+    </div>
+  `;
+}
+
+function opponentGoalRow(event, index) {
+  const onIce = normalizeOnIceIds(event.onIceSkaterIds);
+  return `
+    <div class="opponent-goal-row" data-opp-goal-id="${event.id}">
+      <label>Strength<select class="opp-goal-strength"><option ${event.strength === 'EV' ? 'selected' : ''}>EV</option><option ${event.strength === 'PP' ? 'selected' : ''}>PP</option><option ${event.strength === 'SH' ? 'selected' : ''}>SH</option><option ${event.strength === 'EN' ? 'selected' : ''}>EN</option></select></label>
+      <div class="on-ice-field">
+        <div class="item-sub">EV on ice against: ${escapeHtml(onIceStatus(onIce))}</div>
+        <button class="ghost small select-on-ice" data-kind="against" data-id="${event.id}" type="button">Select 5</button>
+      </div>
+      <label>Note<input class="opp-goal-note" value="${escapeAttr(event.note || '')}" placeholder="Optional"></label>
+      <button class="danger small remove-opp-goal" data-id="${event.id}" aria-label="Remove opponent goal ${index + 1}">Remove</button>
+      <div class="on-ice-summary">${escapeHtml(onIceSummary(onIce))}</div>
     </div>
   `;
 }
@@ -928,6 +1044,8 @@ function goalieRow(line) {
 
 function collectGameFromDom() {
   const old = state.currentDraft || newGame();
+  const oldGoalById = Object.fromEntries((old.scoringPlays || []).map(p => [p.id, p]));
+  const oldOpponentGoalById = Object.fromEntries((old.opponentGoalEvents || []).map(p => [p.id, p]));
   const game = sanitizeGame({
     ...old,
     date: $('#gameDate')?.value || old.date,
@@ -947,7 +1065,14 @@ function collectGameFromDom() {
       strength: $('.goal-strength', row).value,
       scorerId: $('.goal-scorer', row).value,
       assist1Id: $('.goal-assist1', row).value,
-      assist2Id: $('.goal-assist2', row).value
+      assist2Id: $('.goal-assist2', row).value,
+      onIceSkaterIds: normalizeOnIceIds(oldGoalById[row.dataset.goalId]?.onIceSkaterIds || [])
+    })),
+    opponentGoalEvents: $$('.opponent-goal-row').map(row => ({
+      id: row.dataset.oppGoalId,
+      strength: $('.opp-goal-strength', row).value,
+      onIceSkaterIds: normalizeOnIceIds(oldOpponentGoalById[row.dataset.oppGoalId]?.onIceSkaterIds || []),
+      note: $('.opp-goal-note', row).value || ''
     })),
     penalties: $$('.penalty-row').map(row => ({
       id: row.dataset.penaltyId,
@@ -994,7 +1119,7 @@ function bindGameFormEvents() {
 
   $('#addGoalBtn').addEventListener('click', () => {
     const game = collectGameFromDom();
-    game.scoringPlays.push({ id: uid('goal'), strength: 'EV', scorerId: '', assist1Id: '', assist2Id: '' });
+    game.scoringPlays.push({ id: uid('goal'), strength: 'EV', scorerId: '', assist1Id: '', assist2Id: '', onIceSkaterIds: [] });
     state.currentDraft = game;
     renderGameForm();
   });
@@ -1005,6 +1130,22 @@ function bindGameFormEvents() {
     state.currentDraft = game;
     renderGameForm();
   }));
+
+  $('#addOpponentGoalBtn').addEventListener('click', () => {
+    const game = collectGameFromDom();
+    game.opponentGoalEvents.push({ id: uid('oppgoal'), strength: 'EV', onIceSkaterIds: [], note: '' });
+    state.currentDraft = game;
+    renderGameForm();
+  });
+
+  $$('.remove-opp-goal').forEach(btn => btn.addEventListener('click', () => {
+    const game = collectGameFromDom();
+    game.opponentGoalEvents = game.opponentGoalEvents.filter(p => p.id !== btn.dataset.id);
+    state.currentDraft = game;
+    renderGameForm();
+  }));
+
+  $$('.select-on-ice').forEach(btn => btn.addEventListener('click', () => openOnIceSelector(btn.dataset.kind, btn.dataset.id)));
 
   $('#addPenaltyBtn').addEventListener('click', () => {
     const game = collectGameFromDom();
@@ -1054,12 +1195,76 @@ function bindGameFormEvents() {
   });
 }
 
+function skaterPickerGroup(title, players, selected) {
+  if (!players.length) return '';
+  return `
+    <div class="picker-group">
+      <h3>${title}</h3>
+      <div class="skater-picker-grid">
+        ${players.map(p => {
+          const isSelected = selected.includes(p.id);
+          return `<button class="skater-pick ${isSelected ? 'selected' : ''}" data-player-id="${p.id}" type="button">#${p.jersey}<br><span>${escapeHtml(p.last)}</span></button>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function openOnIceSelector(kind, eventId) {
+  const game = collectGameFromDom();
+  const isFor = kind === 'for';
+  const events = isFor ? game.scoringPlays : game.opponentGoalEvents;
+  const event = events.find(e => e.id === eventId);
+  if (!event) return;
+  let selected = normalizeOnIceIds(event.onIceSkaterIds);
+  const title = isFor ? 'PHC EV Goal: Select 5 On Ice' : 'Opponent EV Goal: Select 5 On Ice Against';
+
+  const draw = () => {
+    const forwards = skaters().filter(p => p.position === 'Forward').sort((a, b) => a.jersey - b.jersey);
+    const defense = skaters().filter(p => p.position === 'Defense').sort((a, b) => a.jersey - b.jersey);
+    modalContent.innerHTML = `
+      <h2>${title}</h2>
+      <p class="help">Tap exactly five PHC skaters. Tap a selected player again to remove them.</p>
+      <div class="notice picker-status ${selected.length === 5 ? 'goodish' : ''}"><strong>${selected.length}/5 selected</strong><br>${escapeHtml(onIceSummary(selected))}</div>
+      ${skaterPickerGroup('Forwards', forwards, selected)}
+      ${skaterPickerGroup('Defense', defense, selected)}
+      <div class="row wrap" style="margin-top:14px;">
+        <button id="saveOnIceBtn" class="primary" ${selected.length === 5 ? '' : 'disabled'}>Save 5 Skaters</button>
+        <button id="clearOnIceBtn" class="ghost">Clear</button>
+        <button id="cancelOnIceBtn" class="secondary">Cancel</button>
+      </div>
+    `;
+
+    $$('.skater-pick', modalContent).forEach(btn => btn.addEventListener('click', () => {
+      const id = btn.dataset.playerId;
+      if (selected.includes(id)) selected = selected.filter(x => x !== id);
+      else if (selected.length < 5) selected = [...selected, id];
+      draw();
+    }));
+    $('#clearOnIceBtn', modalContent).addEventListener('click', () => { selected = []; draw(); });
+    $('#cancelOnIceBtn', modalContent).addEventListener('click', closeModal);
+    $('#saveOnIceBtn', modalContent).addEventListener('click', () => {
+      if (selected.length !== 5) return;
+      event.onIceSkaterIds = normalizeOnIceIds(selected);
+      if (isFor) game.scoringPlays = events;
+      else game.opponentGoalEvents = events;
+      state.currentDraft = sanitizeGame(game);
+      autosaveDraft();
+      closeModal();
+      renderGameForm();
+    });
+  };
+
+  draw();
+  if (typeof modal.showModal === 'function' && !modal.open) modal.showModal();
+}
+
 function gameCsvRows(game) {
   const calc = calculateGame(game);
   const rows = [[
     'Game ID', 'Date', 'Opponent', 'Home/Away', 'Location', 'Event', 'Team Goals', 'Opponent Goals', 'Shots For', 'Shots Against', 'Shot Differential',
     'PP Goals', 'PP Opportunities', 'PP%', 'PK Goals Against', 'PK Opportunities', 'PK%', 'Empty Net GA',
-    'Jersey', 'First', 'Last', 'Position', 'G', 'A', 'PTS', 'PPG', 'PPA', 'PPP', 'SHG', 'SHA', 'PIM',
+    'Jersey', 'First', 'Last', 'Position', 'G', 'A', 'PTS', 'PPG', 'PPA', 'PPP', 'SHG', 'SHA', 'PIM', 'EV GF On Ice', 'EV GA On Ice', '+/-',
     'Goalie Minutes', 'Goalie SA', 'Goalie GA', 'Goalie Saves', 'Goalie SV%', 'Goalie GAA', 'Notes'
   ]];
   for (const p of roster().slice().sort((a, b) => a.jersey - b.jersey)) {
@@ -1069,7 +1274,7 @@ function gameCsvRows(game) {
       calc.game.id, calc.game.date, calc.game.opponent, calc.game.homeAway, calc.game.location, calc.game.eventName,
       calc.team.goalsFor, calc.team.opponentGoals, calc.team.shotsFor, calc.team.shotsAgainst, calc.team.shotDifferential,
       calc.team.ppGoals, calc.team.ppOpps, calc.team.ppPct, calc.team.pkGoalsAgainst, calc.team.pkOpps, calc.team.pkPct, calc.team.emptyNetAgainst,
-      p.jersey, p.first, p.last, p.position, ps.goals, ps.assists, ps.points, ps.ppGoals, ps.ppAssists, ps.ppPoints, ps.shGoals, ps.shAssists, ps.pim,
+      p.jersey, p.first, p.last, p.position, ps.goals, ps.assists, ps.points, ps.ppGoals, ps.ppAssists, ps.ppPoints, ps.shGoals, ps.shAssists, ps.pim, ps.evGoalsForOnIce, ps.evGoalsAgainstOnIce, ps.plusMinus,
       gl ? gl.minutes : '', gl ? gl.shotsAgainst : '', gl ? gl.goalsAgainst : '', gl ? gl.saves : '', gl ? gl.savePct : '', gl ? gl.gaa : '', calc.game.notes || ''
     ]);
   }
@@ -1089,32 +1294,61 @@ function exportGameCsv(id) {
 function exportAllGameLogsCsv() {
   const rows = [[
     'Game ID', 'Date', 'Opponent', 'Home/Away', 'Location', 'Event', 'Team Goals', 'Opponent Goals', 'Shots For', 'Shots Against', 'Shot Differential',
-    'PP Goals', 'PP Opportunities', 'PP%', 'PK Goals Against', 'PK Opportunities', 'PK%', 'Empty Net GA', 'Team SV%', 'Team GAA', 'Notes'
+    'PP Goals', 'PP Opportunities', 'PP%', 'PK Goals Against', 'PK Opportunities', 'PK%', 'EV GF Events', 'EV GA Events', 'Opponent Goal Events', 'Empty Net GA', 'Team SV%', 'Team GAA', 'Notes'
   ]];
   for (const game of state.games.slice().reverse()) {
     const calc = calculateGame(game);
     rows.push([
       game.id, game.date, game.opponent, game.homeAway, game.location, game.eventName, calc.team.goalsFor, calc.team.opponentGoals,
       calc.team.shotsFor, calc.team.shotsAgainst, calc.team.shotDifferential, calc.team.ppGoals, calc.team.ppOpps, calc.team.ppPct,
-      calc.team.pkGoalsAgainst, calc.team.pkOpps, calc.team.pkPct, calc.team.emptyNetAgainst, calc.team.teamSavePct, calc.team.teamGaa, game.notes || ''
+      calc.team.pkGoalsAgainst, calc.team.pkOpps, calc.team.pkPct, calc.team.evGoalsForTracked, calc.team.evGoalsAgainstTracked, calc.team.opponentGoalEventsRecorded, calc.team.emptyNetAgainst, calc.team.teamSavePct, calc.team.teamGaa, game.notes || ''
     ]);
   }
   downloadOrShare(`PHC_15U_${state.team.season}_game_log.csv`, 'text/csv', rowsToCsv(rows));
 }
 
+function onIceNames(ids) {
+  return normalizeOnIceIds(ids).map(id => playerLabel(id, '')).filter(Boolean).join(' | ');
+}
+
+function exportOnIceEventsCsv() {
+  const rows = [[
+    'Game ID', 'Date', 'Opponent', 'Home/Away', 'Event Type', 'Strength', 'Scorer', 'Assist 1', 'Assist 2', 'On-Ice Count', 'On-Ice Skaters', 'Note'
+  ]];
+  for (const game of state.games.slice().reverse()) {
+    const clean = sanitizeGame(game);
+    for (const play of clean.scoringPlays) {
+      if (!isEvenStrength(play.strength)) continue;
+      rows.push([
+        clean.id, clean.date, clean.opponent, clean.homeAway, 'PHC Goal For', play.strength,
+        playerLabel(play.scorerId, ''), playerLabel(play.assist1Id, ''), playerLabel(play.assist2Id, ''),
+        normalizeOnIceIds(play.onIceSkaterIds).length, onIceNames(play.onIceSkaterIds), ''
+      ]);
+    }
+    for (const event of clean.opponentGoalEvents) {
+      if (!isEvenStrength(event.strength)) continue;
+      rows.push([
+        clean.id, clean.date, clean.opponent, clean.homeAway, 'Opponent Goal Against', event.strength,
+        '', '', '', normalizeOnIceIds(event.onIceSkaterIds).length, onIceNames(event.onIceSkaterIds), event.note || ''
+      ]);
+    }
+  }
+  downloadOrShare(`PHC_15U_${state.team.season}_on_ice_events.csv`, 'text/csv', rowsToCsv(rows));
+}
+
 function exportSeasonTotalsCsv() {
   const { totals, playerTotals } = calculateSeason(state.games);
   const rows = [[
-    'Jersey', 'First', 'Last', 'Position', 'G', 'A', 'PTS', 'PPG', 'PPA', 'PPP', 'SHG', 'SHA', 'PIM', 'Goalie Minutes', 'Goalie SA', 'Goalie GA', 'Goalie Saves', 'Goalie SV%', 'Goalie GAA'
+    'Jersey', 'First', 'Last', 'Position', 'G', 'A', 'PTS', 'PPG', 'PPA', 'PPP', 'SHG', 'SHA', 'PIM', 'EV GF On Ice', 'EV GA On Ice', '+/-', 'Goalie Minutes', 'Goalie SA', 'Goalie GA', 'Goalie Saves', 'Goalie SV%', 'Goalie GAA'
   ]];
   for (const p of roster().slice().sort((a, b) => a.jersey - b.jersey)) {
     const s = playerTotals[p.id];
     const goalieSave = savePct(s.goalieSaves, s.goalieShotsAgainst);
     const goalieGaa = s.goalieMinutes ? ((s.goalieGoalsAgainst / s.goalieMinutes) * state.team.defaultGameMinutes).toFixed(2) : '';
-    rows.push([p.jersey, p.first, p.last, p.position, s.goals, s.assists, s.points, s.ppGoals, s.ppAssists, s.ppPoints, s.shGoals, s.shAssists, s.pim, s.goalieMinutes, s.goalieShotsAgainst, s.goalieGoalsAgainst, s.goalieSaves, goalieSave, goalieGaa]);
+    rows.push([p.jersey, p.first, p.last, p.position, s.goals, s.assists, s.points, s.ppGoals, s.ppAssists, s.ppPoints, s.shGoals, s.shAssists, s.pim, s.evGoalsForOnIce, s.evGoalsAgainstOnIce, s.plusMinus, s.goalieMinutes, s.goalieShotsAgainst, s.goalieGoalsAgainst, s.goalieSaves, goalieSave, goalieGaa]);
   }
   rows.push([]);
-  rows.push(['TEAM', '', '', '', totals.goalsFor, '', '', totals.ppGoals, '', '', '', '', '', totals.goalieMinutes, totals.shotsAgainst, totals.goalieGoalsAgainst, totals.goalieSaves, totals.teamSavePct, totals.teamGaa]);
+  rows.push(['TEAM', '', '', '', totals.goalsFor, '', '', totals.ppGoals, '', '', '', '', '', totals.evGoalsForTracked, totals.evGoalsAgainstTracked, totals.evGoalsForTracked - totals.evGoalsAgainstTracked, totals.goalieMinutes, totals.shotsAgainst, totals.goalieGoalsAgainst, totals.goalieSaves, totals.teamSavePct, totals.teamGaa]);
   downloadOrShare(`PHC_15U_${state.team.season}_player_totals.csv`, 'text/csv', rowsToCsv(rows));
 }
 
@@ -1122,7 +1356,7 @@ function exportBackupJson() {
   const backup = {
     app: 'PHC 15U Stats',
     type: 'backup',
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     team: state.team,
     roster: roster(),
@@ -1135,7 +1369,7 @@ function exportRosterJson() {
   const payload = {
     app: 'PHC 15U Stats',
     type: 'roster',
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     team: state.team,
     roster: roster()

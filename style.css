@@ -144,7 +144,7 @@ th { position: sticky; top: 0; background: #f1f5f9; z-index: 1; font-size: 12px;
 tr:last-child td { border-bottom: 0; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
-.goal-row, .penalty-row, .goalie-row {
+.goal-row, .opponent-goal-row, .penalty-row, .goalie-row {
   display: grid;
   gap: 8px;
   padding: 10px;
@@ -152,13 +152,38 @@ tr:last-child td { border-bottom: 0; }
   border-radius: 14px;
   background: #f8fafc;
 }
-.goal-row { grid-template-columns: 78px 1fr 1fr 1fr auto; }
+.goal-row { grid-template-columns: 78px 1fr 1fr 1fr 120px auto; }
+.opponent-goal-row { grid-template-columns: 90px 160px 1fr auto; }
 .penalty-row { grid-template-columns: 1fr 86px 1fr auto; }
 .goalie-row { grid-template-columns: 1fr 82px 82px 82px; }
-@media (max-width: 720px) {
-  .goal-row, .penalty-row, .goalie-row { grid-template-columns: 1fr; }
-  .goal-row button, .penalty-row button { width: 100%; }
+.on-ice-field { display: grid; gap: 6px; align-content: end; }
+.on-ice-summary { grid-column: 1 / -1; color: var(--muted); font-size: 12px; line-height: 1.3; }
+@media (max-width: 900px) {
+  .goal-row { grid-template-columns: 78px 1fr 1fr; }
+  .opponent-goal-row { grid-template-columns: 90px 1fr; }
 }
+@media (max-width: 720px) {
+  .goal-row, .opponent-goal-row, .penalty-row, .goalie-row { grid-template-columns: 1fr; }
+  .goal-row button, .opponent-goal-row button, .penalty-row button { width: 100%; }
+}
+
+.picker-status { margin-bottom: 12px; }
+.picker-status.goodish { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+.picker-group { margin-top: 14px; }
+.picker-group h3 { margin: 0 0 8px; font-size: 15px; }
+.skater-picker-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.skater-pick {
+  min-height: 58px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-weight: 900;
+  color: var(--primary);
+}
+.skater-pick span { font-size: 12px; font-weight: 800; color: var(--muted); }
+.skater-pick.selected { background: #111827; color: #fff; border-color: #111827; }
+.skater-pick.selected span { color: #e5e7eb; }
+@media (min-width: 620px) { .skater-picker-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 
 .review-list { display: grid; gap: 8px; }
 .review-item { padding: 9px 10px; border-radius: 12px; background: #f1f5f9; font-size: 13px; }

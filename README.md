@@ -26,6 +26,8 @@ Do not upload any of these to GitHub Pages:
 - Works offline after the first successful load.
 - Stores roster and game data locally on the device using IndexedDB.
 - Tracks scoring plays, PP player stats, team PP/PK, player PIM, team shots, and individual goalie stats.
+- Tracks event-based plus/minus from even-strength goals for and against.
+- Lets you select the exact five PHC skaters on the ice for each EV goal event.
 - Exports CSV files for Google Sheets/Excel.
 - Exports/imports full JSON backups for restore.
 
@@ -42,3 +44,18 @@ Do not upload any of these to GitHub Pages:
 - PK stats are team-level only.
 - Goalie minutes are whole numbers.
 - Default regulation game length is 51 minutes.
+
+## v2.1 update
+
+This build removes the title text from file-share exports so iOS should stop creating an extra `text.txt` file when saving CSV/JSON exports to Files.
+
+## v2.2 update
+
+This build adds event-based plus/minus:
+
+- PHC EV scoring plays now have a **Select 5** on-ice button.
+- Opponent goals have their own section.
+- Opponent EV goals also have a **Select 5** on-ice button.
+- Player totals now include EV goals for on ice, EV goals against on ice, and plus/minus.
+- CSV exports include plus/minus fields.
+- A new **On-Ice Events CSV** export lists the five selected skaters for each EV goal event.
